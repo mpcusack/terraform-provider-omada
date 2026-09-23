@@ -211,3 +211,61 @@ resource "omada_network" "new" {
 		},
 	})
 }
+
+// TestAccNetworkResourceVLANPurpose covers the L2-only VLAN create path.
+//
+// This one does NOT need Open API credentials: a `vlan` network is created on
+// the web API, so the provider config here deliberately omits them. That is
+// half the point of the test — on a site with no gateway (and so no Open API
+// network create to reach) this is the only way to make a VLAN.
+func TestAccNetworkResourceVLANPurpose(t *testing.T) {
+	srv := newMockController(t)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testProviderConfig(srv.URL) + `
+resource "omada_network" "iot" {
+  name    = "IoT-L2"
+  vlan_id = 56
+  purpose = "vlan"
+}`,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("omada_network.iot", "name", "IoT-L2"),
+					resource.TestCheckResourceAttr("omada_network.iot", "vlan_id", "56"),
+					resource.TestCheckResourceAttr("omada_network.iot", "purpose", "vlan"),
+					// Assigned by the controller, not by the configuration.
+					resource.TestCheckResourceAttr("omada_network.iot", "interface_ids.#", "2"),
+					resource.TestCheckResourceAttr("omada_network.iot", "all_lan", "true"),
+				),
+			},
+			{
+				// Setting either controller-owned field is refused with an
+				// explanation rather than silently dropped.
+				Config: testProviderConfig(srv.URL) + `
+resource "omada_network" "bad" {
+  name           = "Nope"
+  vlan_id        = 57
+  purpose        = "vlan"
+  gateway_subnet = "192.168.57.1/24"
+}`,
+				ExpectError: regexp.MustCompile(`gateway_subnet cannot be set on a "vlan" network`),
+			},
+			{
+				// An explicit empty list is a known, non-null value distinct from
+				// omitting the attribute — it must be refused too, not silently
+				// merged onto the controller-assigned interfaceIds by the
+				// follow-up update.
+				Config: testProviderConfig(srv.URL) + `
+resource "omada_network" "bad2" {
+  name          = "AlsoNope"
+  vlan_id       = 58
+  purpose       = "vlan"
+  interface_ids = []
+}`,
+				ExpectError: regexp.MustCompile(`interface_ids cannot be set on a "vlan" network`),
+			},
+		},
+	})
+}
