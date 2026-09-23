@@ -87,6 +87,53 @@ Each resource is one file in `internal/provider/<name>_resource.go` with a match
 6. `skip_tls_verify` (default **true**) installs a permissive TLS transport —
    controllers ship self-signed certs. This default is intentional; don't change it.
 
+### 2.2a Two-factor authentication at login (`internal/omada/totp.go`)
+
+A controller with 2FA enforced (*Global View → Settings → Account Security*)
+answers step 2 above with a challenge instead of a token:
+
+```
+POST /{omadacId}/api/v2/login  {"username","password"}
+-> errorCode -30165, result {}          // 6.1.0.19; other builds carry
+                                        // "MFAId" and "supportedMFATypes"
+
+POST /{omadacId}/api/v2/checkMFACodeAndLogin
+   {"username","password","code","MFAId","mfaType":3}
+-> result {"token": …, "roleType": …}          // the same token as a plain login
+```
+
+Learned from the controller's own login page (`modules/login/{models,controllers}`
+under the UI's static assets), which is the only description of it that exists.
+`mfaType` is `2` for an emailed code and `3` for an authenticator app; the UI
+sends `-30138` down the same path as `-30165`. Both challenge fields are
+optional — a live OC200 returns an empty result, and the login page falls back
+to an empty `MFAId` and an authenticator-app code, which the controller
+accepts. A wrong code returns `-30139`
+with `result.codeRemainAttempts`, counting down to a temporary account lock.
+
+Three consequences shape the implementation:
+
+- **Only TOTP can be automated.** An emailed code needs a human, so an account
+  whose `supportedMFATypes` lacks `3` fails with an error naming its actual
+  methods rather than a generic rejection.
+- **Retry a rejected code exactly once.** Codes are single-use, and a separate
+  process — the previous terraform command, a browser login — may already have
+  spent this window's, which looks identical to a wrong secret. One retry in
+  the next window rescues that; a second would start walking a genuinely wrong
+  secret toward the lock. A live 6.1.0.19 controller sends `-30139` with no
+  `codeRemainAttempts` at all, so the retry cannot be gated on the budget —
+  when the field *is* present and nearly spent, stop at the first rejection.
+  A malformed secret is caught when the client is built, before a code is sent.
+- **Never replay a code.** A re-login after a session timeout can land in the
+  same 30-second window as the previous one, so `nextTOTPCode` waits for the
+  next window rather than resending the code the controller already saw.
+
+`totp_secret` is optional and documented as the weakening it is: the secret
+lives beside the password, so it buys automation for one account rather than
+real second-factor protection. What it preserves is 2FA *enforcement* for every
+human account on the controller, which is otherwise the thing an operator has
+to give up to run this provider at all.
+
 ### 2.3 Sites (`internal/omada/sites.go`)
 
 Everything is site-scoped. `ResolveSiteID(ctx, name)` maps a site *name* to its ID,
