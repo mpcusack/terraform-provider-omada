@@ -86,13 +86,18 @@ resource "omada_access_point" "this" {
 			},
 			{
 				// A real change writes exactly one radio, and only that one.
+				// tx_power only applies at level 3 (custom); the mock seeds 4
+				// (auto), so set both to model a change that matters on
+				// hardware. They share one radio document, so still one write.
 				Config: testProviderConfig(srv.URL) + `
 resource "omada_access_point" "this" {
-  mac               = "10:5a:95:89:c3:64"
-  name              = "Living Room"
-  radio_5g_tx_power = 20
+  mac                     = "10:5a:95:89:c3:64"
+  name                    = "Living Room"
+  radio_5g_tx_power_level = 3
+  radio_5g_tx_power       = 20
 }`,
 				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("omada_access_point.this", "radio_5g_tx_power_level", "3"),
 					resource.TestCheckResourceAttr("omada_access_point.this", "radio_5g_tx_power", "20"),
 					func(*terraform.State) error {
 						if got := radioWrites("radioSetting5g"); got != 1 {
